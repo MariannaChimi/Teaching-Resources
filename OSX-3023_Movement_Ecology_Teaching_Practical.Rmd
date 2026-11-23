@@ -12,7 +12,6 @@ output:
     code_folding: show
     theme: readable
     df_print: paged
-
 ---
 
 ```{r setup, include=FALSE}
