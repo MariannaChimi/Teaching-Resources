@@ -1,0 +1,1037 @@
+---
+title: "OSX-3023: Mapping and Spatial Analysis of tracking and occurrence data"
+subtitle: "Practical workbook"
+author: "Marianna Chimienti"
+date: "`r Sys.Date()`"
+
+output:
+  html_document:
+    toc: true
+    toc_depth: 3
+    number_sections: true
+    code_folding: show
+    theme: readable
+    df_print: paged
+
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  message = FALSE,
+  warning = TRUE,
+  fig.width = 9,
+  fig.height = 6,
+  out.width = "100%"
+)
+```
+
+# Introduction
+
+## About this practical
+
+This practical introduces spatial data handling and mapping in R, followed by a series of movement-ecology tasks using animal tracking data. You will work with world boundaries, GPS locations, time stamps, movement distances, kernel utilisation distributions, and biodiversity occurrence records.
+
+The practical is designed to be completed step by step. Read the explanation before running each code chunk, inspect the output, and discuss questions with your demonstrator where indicated.
+
+## Learning objectives
+
+By the end of the practical, you should be able to:
+
+- recognise and inspect spatial data stored as `sf` objects;
+- create maps and work with different map projections;
+- prepare animal tracking data;
+- identify and investigate missing values;
+- map animal tracks and improve map presentation;
+- calculate straight-line distances and track length;
+- estimate kernel utilisation distributions (home-range contours);
+- explore movement behaviour using the EMbC approach;
+- retrieve and map species occurrence records from GBIF.
+
+## Before you begin: files and folders
+
+Make sure the practical data files are available on your computer. The original script refers to:
+
+- `Humpback_whale_ID112699.csv`
+- `falsekillerwhale.csv`
+
+The original script expects these files to be inside a folder named `OSX-3023_RPractical`. Either keep that folder structure or change the file paths in the `read_csv()` and `read.csv()` commands below.
+
+# Set up R
+
+## Install packages
+
+You only need to install a package once on a computer. If a package is already installed, you do not need to install it again. Remove the comment symbol `#` from an installation line when you need to run it.
+
+```{r install-packages, eval=FALSE}
+install.packages("cowplot")
+install.packages("ggplot2")
+install.packages("ggrepel")
+install.packages("ggspatial")
+install.packages("sf")
+install.packages("rnaturalearth")
+install.packages("rnaturalearthdata")
+install.packages("terra")
+install.packages("argosfilter")
+install.packages("adehabitatHR")
+install.packages("EMbC")
+install.packages("geosphere")
+install.packages("trip")
+install.packages("readr")
+install.packages("lubridate")
+install.packages("tidyverse")
+install.packages("ggpattern")
+install.packages("rgbif")
+```
+
+Some spatial packages may require additional system libraries, depending on your operating system. If installation fails, note the full error message and ask your demonstrator for help.
+
+## Load packages
+
+```{r load-packages}
+library(cowplot)
+library(ggplot2)
+library(ggrepel)
+library(ggspatial)
+library(sf)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(terra)
+library(argosfilter)
+library(adehabitatHR)
+library(EMbC)
+library(geosphere)
+library(trip)
+library(readr)
+library(lubridate)
+library(tidyverse)
+library(ggpattern)
+```
+
+For the biodiversity-download section later in the practical, you will also need:
+
+```{r biodiversity-packages}
+library(rgbif)
+```
+
+# Spatial data and mapping with sf
+
+## What is an `sf` object?
+
+The `sf` package provides a standard way to store and work with vector spatial data in R. An `sf` object is similar to a data frame, but it also contains a geometry column describing spatial features such as points, lines and polygons. For example, a world countries dataset contains country attributes and a polygon geometry for each country.
+
+Set a consistent plotting theme and download country boundaries from Natural Earth:
+
+```{r load-world}
+theme_set(theme_bw())
+
+world <- ne_countries(
+  scale = "medium",
+  returnclass = "sf"
+)
+
+class(world)
+```
+
+<div style="background-color:#fff3df; border-left:6px solid #c47b18; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>EXPLORE</strong>
+<p>What class names are returned? Which column contains the geometries?</p>
+</div>
+
+## Make your first world map
+
+`geom_sf()` is designed to draw geometries stored in `sf` objects.
+
+```{r first-world-map}
+myMap <- ggplot() +
+  geom_sf(data = world)
+
+myMap
+```
+
+Try changing the fill and boundary colours. What happens if you map a country attribute, such as `continent`, to `fill`?
+
+```{r world-by-continent}
+ggplot() +
+  geom_sf(data = world,aes(fill = continent),colour = "grey40",linewidth = 0.2) +
+  labs(title = "Countries of the world",fill = "Continent") +
+  theme_minimal()
+```
+
+## Coordinate reference systems and projections
+
+### Inspect the coordinate reference system
+
+A Coordinate Reference System (CRS) describes how spatial coordinates relate to locations on the Earth. Geographic CRSs commonly use longitude and latitude in angular units. Projected CRSs transform locations onto a flat map and commonly use linear units such as metres.
+
+Inspect the CRS of the world dataset:
+
+```{r inspect-crs}
+st_crs(world)
+```
+
+### Transform the world to Robinson
+
+The Robinson projection is a compromise world projection often used for general-purpose world maps. It does not preserve every property (area, distance, direction and shape) everywhere.
+
+`st_transform()` changes the coordinates from the existing CRS to the requested CRS.
+
+```{r robinson-world}
+world_robinson <- st_transform(world,crs = "+proj=robin +datum=WGS84")
+
+ggplot() +
+  geom_sf(data = world_robinson) +
+  labs(title = "World map: Robinson projection") +
+  theme_minimal()
+```
+
+### Centre the Robinson map on the Indian Ocean
+
+A projection's central meridian controls which longitude is placed at the centre of the map. The following workflow breaks geometries at the antimeridian before transforming them. This helps avoid long, unwanted polygon edges when the map is centred away from the Greenwich meridian.
+
+```{r robinson-indian-ocean}
+# Define a Robinson projection centred at 90 degrees East
+robinson <- paste(
+  "+proj=robin +lon_0=90 +x_0=0 +y_0=0",
+  "+ellps=WGS84 +datum=WGS84 +units=m +no_defs"
+)
+
+# Break geometries at the antimeridian, then transform
+world_robinson_indian <- world %>%
+  st_break_antimeridian(lon_0 = 90) %>%
+  st_transform(crs = robinson)
+
+# Approximate scale-bar position and length in projected metres
+x_start <- -12000000
+y_start <- -4000000
+scale_length <- 2000000
+
+ggplot() +
+  geom_sf(data = world_robinson_indian,aes(fill = continent),colour = "grey30",linewidth = 0.2) +
+  geom_segment(aes(x = x_start,xend = x_start + scale_length,y = y_start,yend = y_start),colour = "black",linewidth = 1) +
+  geom_text(aes(x = x_start + scale_length / 2,y = y_start - 1000000),label = "2000 km",size = 5) +
+  scale_fill_viridis_d() +
+  labs(
+    title = "World map",
+    subtitle = "Robinson projection centred on the Indian Ocean",
+    fill = "Continent"
+  ) +
+  coord_sf(crs = st_crs(world_robinson_indian)) +
+  theme_minimal(base_size = 14) +
+  theme(
+    axis.text = element_blank(),
+    axis.ticks = element_blank(),
+    axis.title = element_blank()
+  )
+```
+
+The scale-bar coordinates above are manually positioned and are intended as a plotting exercise. For a publication-quality map, use a projection-aware scale-bar function and check that the scale is appropriate for the map location.
+
+<div style="background-color:#fbeaf1; border-left:6px solid #c45b83; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>TRY IT</strong>
+<p>Change `lon_0 = 90` to another longitude. How does the map change? Try a central meridian near the Atlantic or Pacific.</p>
+</div>
+
+<div style="background-color:#eaf2fb; border-left:6px solid #2874a6; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>REMEMBER</strong>
+<p>`st_transform()` transforms coordinates. `st_set_crs()` assigns CRS metadata to coordinates that are already known to use that CRS; it does not transform the coordinates. Do not use `st_set_crs()` as a substitute for reprojection.</p>
+</div>
+
+### Mapping the Arctic
+
+The North Polar Stereographic projection is useful for mapping high northern latitudes. Here we use EPSG:3413.
+
+```{r arctic-map}
+arctic <- st_transform(world, crs = 3413)
+
+ggplot() +
+  geom_sf(data = arctic,fill = "lightblue",colour = "grey40",linewidth = 0.2) +
+  coord_sf(
+    xlim = c(-3000000, 3000000),
+    ylim = c(-3000000, 3000000),
+    crs = st_crs(3413)
+  ) +
+  labs(
+    title = "The Arctic",
+    subtitle = "North Polar Stereographic projection (EPSG:3413)"
+  ) +
+  theme_minimal()
+```
+
+### Mapping Antarctica
+
+For Antarctica, use the Antarctic Polar Stereographic projection, EPSG:3031.
+
+```{r antarctic-map}
+antarctica <- st_transform(world, crs = 3031)
+
+ggplot() +
+  geom_sf(data = antarctica,fill = "lightblue",colour = "grey40",linewidth = 0.2) +
+  coord_sf(
+    xlim = c(-3000000, 3000000),
+    ylim = c(-3000000, 3000000),
+    crs = st_crs(3031)
+  ) +
+  labs(
+    title = "Antarctica",
+    subtitle = "South Polar Stereographic projection (EPSG:3031)"
+  ) +
+  theme_minimal()
+```
+
+The world country-boundary layer is useful for demonstrating the projection, but a dedicated coastline or Antarctic continent dataset will show the Antarctic coastline in more detail.
+
+### Check your understanding
+
+1. What is the difference between a geographic CRS and a projected CRS?
+2. Why does the shape or apparent size of a country change between projections?
+3. What does the `lon_0` parameter control in the Robinson projection?
+4. Why do we use different polar projections for the Arctic and Antarctic?
+
+
+# Humpback whale: preparing and mapping tracking data
+## Load the tracking data
+
+Read the humpback whale dataset. Change the path if your file is stored somewhere else.
+
+```{r load-humpback}
+Humpback_whale_ID112699 <- read_csv("Humpback_whale_ID112699.csv")
+```
+
+Start by inspecting the data. Look at the first few rows and the structure of the columns.
+
+```{r inspect-humpback, include=FALSE}
+head(Humpback_whale_ID112699)
+glimpse(Humpback_whale_ID112699)
+```
+
+<div style="background-color:#fff3df; border-left:6px solid #c47b18; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>EXPLORE</strong>
+<p>Which columns contain the date, time, longitude and latitude? Are the coordinates stored as numeric values? Are there any missing values?</p>
+</div>
+
+## Combine date and time
+The date and time are initially stored in separate columns. Combine them into one character column:
+
+```{r combine-date-time}
+Humpback_whale_ID112699$Date_Time <- paste(Humpback_whale_ID112699$Date,Humpback_whale_ID112699$Time,sep = " ")
+```
+
+Convert the combined date-time string into a POSIXct date-time object. The format string below assumes dates are written as day/month/year and times include hours, minutes and seconds.
+
+```{r convert-date-time}
+Humpback_whale_ID112699$Date_TimePosix <- as.POSIXct(
+  Humpback_whale_ID112699$Date_Time,
+  format = "%d/%m/%Y %H:%M:%S"
+)
+
+class(Humpback_whale_ID112699$Date_Time)
+class(Humpback_whale_ID112699$Date_TimePosix)
+```
+
+If the conversion is unsuccessful, check the original date and time strings. The format supplied to `as.POSIXct()` must match the format in the data.
+
+## Find and investigate missing values
+
+First, identify rows that contain at least one missing value:
+
+```{r find-all-missing}
+Humpback_whale_ID112699 %>%
+  filter(if_any(everything(), is.na))
+```
+
+Now focus on rows where the converted date-time is missing:
+
+```{r find-missing-datetime}
+Humpback_whale_ID112699[
+  which(is.na(Humpback_whale_ID112699$Date_TimePosix)),
+]
+```
+
+The `which()` function returns the row positions where the condition is true. Inspect the surrounding rows:
+
+```{r inspect-problem-rows}
+Humpback_whale_ID112699[1150:1160, ]
+```
+
+Discuss with your demonstrator what may have caused the problem. Do not invent dates or times. The practical removes rows where the date-time conversion failed:
+
+```{r remove-invalid-datetime}
+Humpback_whale_ID112699 <- Humpback_whale_ID112699 %>%
+  filter(!is.na(Date_TimePosix))
+```
+
+<div style="background-color:#fdeaea; border-left:6px solid #c0392b; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>IMPORTANT</strong>
+<p>Removing records changes the track and may create a larger time gap between consecutive locations. Always document how many records were removed and consider how this affects later movement calculations.</p>
+</div>
+
+## Create a month variable
+
+Extract the month from the converted date-time:
+
+```{r create-month}
+Humpback_whale_ID112699$month_Date <- month(
+  Humpback_whale_ID112699$Date_TimePosix
+)
+```
+
+Convert the month to a factor so it is treated as a category when mapping:
+
+```{r month-factor}
+Humpback_whale_ID112699$month_Date <- as.factor(
+  Humpback_whale_ID112699$month_Date
+)
+```
+
+Other examples of variables that might be treated as factors include season, sex, species and individual ID.
+
+## Plot the whale track
+
+Start with a simple map showing the world and the whale's locations.
+
+```{r basic-whale-map}
+myMap <- ggplot() +
+  geom_sf(data = world) +
+  geom_point(data = Humpback_whale_ID112699,mapping = aes(x = Longitude, y = Latitude))
+
+myMap
+```
+
+The original practical focuses on the Southern Ocean region. Zoom in on the track and label the axes:
+
+```{r zoom-whale-map}
+ggplot() +
+  geom_sf(data = world) +
+  geom_point(data = Humpback_whale_ID112699,aes(x = Longitude, y = Latitude)
+  ) +
+  coord_sf(
+    xlim = c(-90, 0),
+    ylim = c(-90, 0)
+  ) +
+  xlab(expression(paste("Longitude (", degree, "W)"))) +
+  ylab(expression(paste("Latitude (", degree, "S)")))
+```
+
+Improve the map by adding a scale bar and north arrow:
+
+```{r whale-map-scale-arrow}
+ggplot() +
+  geom_sf(data = world) +
+  geom_point(data = Humpback_whale_ID112699,aes(x = Longitude, y = Latitude)) +
+  coord_sf(
+    xlim = c(-85, 0),
+    ylim = c(-85, 0)
+  ) +
+  xlab(expression(paste("Longitude (", degree, "W)"))) +
+  ylab(expression(paste("Latitude (", degree, "S)"))) +
+  ggspatial::annotation_scale(
+    location = "tr",
+    bar_cols = c("grey60", "white")
+  ) +
+  ggspatial::annotation_north_arrow(
+    location = "tr",
+    which_north = "true",
+    pad_x = unit(0.4, "in"),
+    pad_y = unit(0.4, "in"),
+    style = ggspatial::north_arrow_nautical(
+      fill = c("grey40", "white"),
+      line_col = "grey20"
+    )
+  ) +
+  theme_minimal()
+```
+
+The scale bar and north arrow are added by `ggspatial`. Their position can be changed using arguments such as `location`, `pad_x` and `pad_y`.
+
+## Show the track by month
+
+How many unique dates are there? How many unique months?
+
+```{r count-dates-months}
+length(unique(Humpback_whale_ID112699$Date_Time))
+length(unique(Humpback_whale_ID112699$month_Date))
+```
+
+Colour the locations by month:
+
+```{r whale-map-month}
+ggplot() +
+  geom_sf(data = world) +
+  geom_point(data = Humpback_whale_ID112699,aes(x = Longitude,y = Latitude,colour = month_Date),alpha = 0.7) +
+  coord_sf(
+    xlim = c(-85, 0),
+    ylim = c(-85, 0)
+  ) +
+  xlab(expression(paste("Longitude (", degree, "W)"))) +
+  ylab(expression(paste("Latitude (", degree, "S)"))) +
+  ggspatial::annotation_scale(location = "tr") +
+  ggspatial::annotation_north_arrow(
+    location = "tr",
+    which_north = "true"
+  ) +
+  labs(
+    title = "Humpback whale track",
+    colour = "Month"
+  ) +
+  theme_minimal()
+```
+
+<div style="background-color:#fbeaf1; border-left:6px solid #c45b83; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>TRY IT</strong>
+<p>Improve the legend and experiment with colour palettes. Does the map make the seasonal progression of the track easier to interpret?</p>
+</div>
+
+# Humpback whale: movement distances
+
+<div style="background-color:#e6f5f5; border-left:6px solid #168c8c; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>QUESTION</strong>
+<p>1. What was the maximum straight-line distance from Brabant Island?.</p>
+</div>
+
+The original practical uses approximate coordinates for Brabant Island. Check these coordinates against an appropriate geographic source before treating them as definitive.
+
+```{r distance-from-island}
+BI_LAT <- -64.3
+BI_LON <- -62.3
+
+brabant <- c(BI_LON, BI_LAT)
+
+dist_from_island <- data.frame(
+  distGeo(
+    brabant,
+    Humpback_whale_ID112699[, c("Longitude", "Latitude")]
+  )
+)
+
+head(dist_from_island)
+max(dist_from_island)
+```
+
+`distGeo()` calculates geodesic distance between longitude/latitude coordinates. Check the function documentation to confirm the units returned.
+
+<div style="background-color:#e6f5f5; border-left:6px solid #168c8c; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>QUESTIONS</strong>
+<ol>
+<li>1. What is the maximum distance, and what are its units? Which whale location is furthest from the island?</li>
+<li>2. What was the total distance covered along the track?</li>
+</ol>
+</div>
+
+The maximum straight-line distance from a reference point is not the same as the total distance travelled. To estimate track length, calculate the distance between each pair of consecutive locations and sum those distances.
+
+First, create an object containing only longitude and latitude:
+
+```{r consecutive-coordinates}
+locs <- cbind(
+  Humpback_whale_ID112699$Longitude,
+  Humpback_whale_ID112699$Latitude
+)
+```
+
+Calculate distances between consecutive locations:
+
+```{r track-distance}
+locs <- data.frame(
+  trackDistance(locs, longlat = TRUE)
+)
+
+head(locs)
+str(locs)
+
+colnames(locs)[1] <- "dist"
+
+head(locs)
+```
+
+Sum the distances:
+
+```{r total-track-distance}
+sum(locs$dist, na.rm = TRUE)
+```
+
+Check the units returned by `trackDistance()` and report the total track length with units.
+
+<div style="background-color:#f1eafa; border-left:6px solid #7952a3; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>INTERPRETATION</strong>
+<p>This calculation joins consecutive recorded locations with straight segments. It estimates the distance along the observed track; it does not reveal the exact path the whale took between fixes.</p>
+</div>
+
+# Humpback whale: estimating a kernel home range
+
+## What is a kernel utilisation distribution?
+
+A kernel utilisation distribution (KUD) estimates the intensity of an animal's space use from its recorded locations. Contours such as 50% and 95% are commonly used to describe areas of concentrated use and broader space use. These contours are estimates and depend on the data and smoothing choices.
+
+The `adehabitatHR` workflow used in the original practical relies on spatial objects from the `sp` package and a projected coordinate system.
+
+## Prepare the tracking locations
+
+```{r prepare-humpback-sp}
+hw.HR <- SpatialPointsDataFrame(
+  coords = cbind(
+    Humpback_whale_ID112699$Longitude,
+    Humpback_whale_ID112699$Latitude
+  ),
+  data = Humpback_whale_ID112699,
+  proj4string = CRS(
+    "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+  )
+)
+```
+
+Transform the points to UTM Zone 18 South, as in the original practical:
+
+```{r project-humpback-sp}
+hw.HR <- spTransform(
+  hw.HR,
+  CRS("+proj=utm +zone=18 +south +datum=WGS84 +units=m +no_defs")
+)
+```
+
+<div style="background-color:#fdeaea; border-left:6px solid #c0392b; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>IMPORTANT</strong>
+<p>A suitable projected CRS is essential for home-range analysis because the calculations use distances and areas. Check that the chosen UTM zone is appropriate for the geographic extent of the track.</p>
+</div>
+
+## Calculate the kernel utilisation distribution
+
+```{r humpback-kernel}
+hw.HR <- kernelUD(hw.HR, h = "href")
+```
+
+Extract the 95% and 50% contours. The original script labels the 95% contour as `hbw.kud.95` and the 50% contour as `hbw.kud.50`.
+
+```{r humpback-kernel-contours}
+hbw.kud.95 <- getverticeshr(
+  hw.HR,
+  95,
+  unout = "km2"
+)
+
+hbw.kud.50 <- getverticeshr(
+  hw.HR,
+  50,
+  unout = "km2"
+)
+
+hbw.kud.95
+hbw.kud.50
+```
+
+Plot the contours:
+
+```{r humpback-kernel-base-plot}
+plot(hbw.kud.95, col = "darkgrey")
+plot(hbw.kud.50, col = "lightgrey", add = TRUE)
+axis(1)
+axis(2)
+```
+
+The 50% contour represents a smaller, more intensively used part of the estimated utilisation distribution than the 95% contour.
+
+## Convert the contours to `sf` and add them to a map
+
+Convert each contour to `sf`, transform it to longitude/latitude, and add an identifying column:
+
+```{r humpback-kernel-to-sf}
+hbw.kud.50_sf <- st_as_sf(hbw.kud.50) %>%
+  st_transform(crs = "+proj=longlat +datum=WGS84") %>%
+  mutate(id = "HR 50")
+
+hbw.kud.95_sf <- st_as_sf(hbw.kud.95) %>%
+  st_transform(crs = "+proj=longlat +datum=WGS84") %>%
+  mutate(id = "HR 95")
+
+single_sf_HW <- bind_rows(
+  hbw.kud.95_sf,
+  hbw.kud.50_sf
+)
+```
+
+Plot the locations and home-range contours together:
+
+```{r humpback-final-map}
+ggplot() +
+  geom_sf(data = world) +
+  geom_point(data = Humpback_whale_ID112699,aes(x = Longitude,y = Latitude,colour = as.factor(ID))) +
+  scale_colour_manual(name = "Animal ID",values = "deepskyblue4") +
+  geom_sf(data = single_sf_HW,aes(fill = id),alpha = 0.4) +
+  scale_fill_manual(name = "Kernel - HR",
+    values = c("HR 95" = "grey80", "HR 50" = "grey10")
+  ) +
+  coord_sf(
+    xlim = c(-90, 0),
+    ylim = c(-85, 5)
+  ) +
+  xlab(expression(paste("Longitude (", degree, "W)"))) +
+  ylab(expression(paste("Latitude (", degree, "N)"))) +
+  ggspatial::annotation_scale(location = "br") +
+  ggspatial::annotation_north_arrow(
+    location = "tr",
+    which_north = "true"
+  ) +
+  theme_minimal()
+```
+
+
+
+# Biodiversity occurrence data: GBIF
+
+Biodiversity occurrence databases provide records of where organisms have been observed or collected. In this section, you will retrieve humpback whale records and map their geographic distribution.
+
+GBIF covers terrestrial, freshwater and marine biodiversity.
+
+## Download and map GBIF records
+
+The `occ_search()` function searches the GBIF occurrence database. Here, we request up to 10,000 records for humpback whale. This is a cap for a manageable practical exercise, not necessarily a complete representation of the species' known distribution.
+
+```{r download-gbif}
+res <- occ_search(
+  scientificName = "Megaptera novaeangliae",
+  limit = 10000
+)
+```
+
+Extract the occurrence data and remove records without coordinates:
+
+```{r prepare-gbif}
+humpback_gbif <- res$data %>%
+  filter(
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude)
+  )
+
+nrow(humpback_gbif)
+```
+
+Create a world map and plot the occurrence records:
+
+```{r map-gbif}
+world <- ne_countries(
+  scale = "medium",
+  returnclass = "sf"
+)
+
+ggplot() +
+  geom_sf(data = world,fill = "grey90",colour = "grey60") +
+  geom_point(data = humpback_gbif,aes(x = decimalLongitude, y = decimalLatitude),colour = "red",size = 1,alpha = 0.5) +
+  labs(title = "Humpback whale occurrences (GBIF data)",x = "Longitude",y = "Latitude") +
+  theme_minimal()
+```
+
+Explore the records:
+
+```{r explore-gbif}
+unique(humpback_gbif$publishingCountry)
+unique(humpback_gbif$basisOfRecord)
+```
+
+
+## Let's look at another species and play with the projections: narwhal records
+
+```{r download-obis}
+narwhal_obis <- occ_search(
+  scientificName = "Monodon monoceros", limit = 2000
+)
+```
+
+Remove records that do not have geographic coordinates:
+
+```{r prepare-obis}
+narwhal_obis <- narwhal_obis$data %>%
+  filter(
+    !is.na(decimalLongitude),
+    !is.na(decimalLatitude)
+  )
+
+# How many records have coordinates?
+nrow(narwhal_obis)
+
+# Explore the years represented in the dataset, reflect on this distribution
+summary(narwhal_obis$year)
+```
+
+## Map narwhal occurrences using the Robinson projection
+
+We can convert the occurrence records into an `sf` object so that they can be transformed and mapped alongside the world boundaries.
+
+```{r obis-to-sf}
+narwhal_sf <- st_as_sf(
+  narwhal_obis,
+  coords = c("decimalLongitude", "decimalLatitude"),
+  crs = 4326,
+  remove = FALSE
+)
+
+# Transform the occurrence points to Robinson
+narwhal_robinson <- st_transform(
+  narwhal_sf,
+  crs = "+proj=robin +datum=WGS84"
+)
+```
+
+Now plot the records on the Robinson world map:
+
+```{r obis-robinson-map}
+ggplot() +
+  geom_sf(data = world_robinson,fill = "grey90",colour = "grey60",linewidth = 0.2) +
+  geom_sf(data = narwhal_robinson,colour = "darkblue",size = 1,alpha = 0.5) +
+  labs(
+    title = "Narwhal occurrences recorded by OBIS",
+    subtitle = "Robinson projection",
+    x = "Longitude",
+    y = "Latitude"
+  ) +
+  theme_minimal()
+```
+<div style="background-color:#fff3df; border-left:6px solid #c47b18; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>EXPLORE</strong>
+<p>Where are most of the narwhal records located? Are there records outside the Arctic?</p>
+</div>
+
+## Map narwhal occurrences using an Arctic projection
+
+The Robinson projection is useful for visualising global distributions, but it is not ideal for examining high-latitude regions in detail.
+
+For this map, we will use the North Polar Stereographic projection (EPSG:3413), which is suitable for mapping the Arctic.
+
+First, select records north of 50 degrees latitude:
+
+```{r obis-arctic-data}
+narwhal_arctic <- narwhal_obis %>%
+  filter(decimalLatitude >= 50)
+
+# How many records are located north of 50 degrees?
+nrow(narwhal_arctic)
+
+# Convert the Arctic records to sf
+narwhal_arctic_sf <- st_as_sf(
+  narwhal_arctic,
+  coords = c("decimalLongitude", "decimalLatitude"),
+  crs = 4326,
+  remove = FALSE
+)
+
+# Transform the occurrence points to the Arctic projection
+narwhal_arctic_sf <- st_transform(
+  narwhal_arctic_sf,
+  crs = 3413
+)
+```
+
+Transform the world boundaries and create the Arctic map:
+
+```{r obis-arctic-map}
+arctic <- st_transform(world, crs = 3413)
+
+ggplot() +
+  geom_sf(data = arctic,fill = "grey90",colour = "grey50",linewidth = 0.2) +
+  geom_sf(data = narwhal_arctic_sf,colour = "darkblue",size = 1.5,alpha = 0.6) +
+  coord_sf(
+    xlim = c(-3000000, 3000000),
+    ylim = c(-3000000, 3000000),
+    crs = st_crs(3413)
+  ) +
+  labs(
+    title = "Narwhal occurrences in the Arctic",
+    subtitle = "OBIS records north of 50 degrees latitude",
+    x = "Easting",
+    y = "Northing"
+  ) +
+  theme_minimal()
+```
+
+<div style="background-color:#eaf2fb; border-left:6px solid #2874a6; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>REMEMBER</strong>
+<p>OBIS occurrence records show where observations have been reported. They do not necessarily represent the complete distribution or abundance of a species. Some of these records are museum records, not sightings. Check and acknowledge the relevant OBIS dataset citations when using the downloaded records.</p>
+</div> 
+
+<div style="background-color:#eaf5ea; border-left:6px solid #388e3c; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>TASKS</strong>
+<ul style="list-style-type:none; padding-left:0;">
+<li>☐ Download occurrence data for other species and build maps.</li>
+<li>☐ Depending on the species range/records'range you can zoom in across different areas.</li>
+<li>☐ Complete these maps with north arrow, scale... etc.</li>
+<li>☐ Check its consistency with the IUCN distribution.</li>
+</ul>
+</div>
+
+
+# False killer whale: mapping and home range
+
+## Load and inspect the data
+
+```{r load-false-killer-whale}
+fkw <- read.csv("falsekillerwhale.csv",header = TRUE,sep = ",")
+
+head(fkw)
+str(fkw)
+summary(fkw)
+```
+
+<div style="background-color:#eaf5ea; border-left:6px solid #388e3c; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>TASKS</strong>
+<ul style="list-style-type:none; padding-left:0;">
+<li>☐ Convert the date-time column to POSIXct.</li>
+<li>☐ Map the false killer whale track.</li>
+<li>☐ Choose an appropriate map extent and add a scale bar and north arrow.</li>
+<li>☐ Estimate the false killer whale kernel home range (help on the CRS below).</li>
+<li>☐ EMap the kernels.</li>
+</ul>
+</div>
+
+
+Transforms coordinates to UTM Zone 4 North, and estimates a kernel utilisation distribution.
+
+```{r false-killer-sp}
+fkw.HR <- SpatialPointsDataFrame(
+  coords = cbind(fkw$Longitude, fkw$Latitude),
+  data = fkw,
+  proj4string = CRS(
+    "+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs"
+  )
+)
+
+fkw.HR <- spTransform(
+  fkw.HR,
+  CRS("+proj=utm +zone=4 +north +datum=WGS84 +units=m +no_defs")
+)
+```
+
+
+# Behavioural classification with EMbC
+
+## What is behavioural classification?
+
+The practical uses the EMbC package to classify movement using speed and turning-angle information. The scatterplot groups locations into combinations of relatively low and high values. In the labels, `L` means low and `H` means high.
+
+The interpretation of clusters should be checked against the movement data and ecological context; cluster numbers do not automatically mean a particular behaviour.
+
+## Run the EMbC algorithm
+
+```{r run-embc}
+embc_fkw <- stbc(fkw, info = -1)
+```
+
+Plot the classification:
+
+```{r plot-embc}
+sctr(embc_fkw)
+```
+
+The original practical describes the combinations as:
+
+- `LL`: low speed and low turning angle;
+- `LH`: low speed and high turning angle;
+- `HL`: high speed and low turning angle;
+- `HH`: high speed and high turning angle.
+
+Add the cluster labels to the tracking data:
+
+```{r add-behaviour}
+fkw$behaviour <- embc_fkw@A
+
+embc_fkw@R
+```
+
+The following labels reproduce the interpretation in the original practical. Treat these as hypotheses to evaluate, rather than universal definitions of behaviour.
+
+```{r label-behaviour}
+fkw$behaviour[fkw$behaviour == "1"] <- "resting"
+fkw$behaviour[fkw$behaviour == "2"] <- "foraging"
+fkw$behaviour[fkw$behaviour == "3"] <- "travelling"
+fkw$behaviour[fkw$behaviour == "4"] <- "foraging"
+fkw$behaviour[fkw$behaviour == "5"] <- "unknown"
+```
+
+## Calculate the time budget
+
+The original script divides the number of fixes in each behaviour by the total number of fixes:
+
+```{r behaviour-time-budget}
+table(fkw$behaviour) / nrow(fkw)
+```
+
+This is a proportion of recorded locations, not necessarily a proportion of elapsed time. It is most directly interpretable as a time budget when sampling intervals are regular and records are not missing.
+
+## Assign colours and plot behaviour along the track
+
+```{r behaviour-colours}
+fkw$behavCol[fkw$behaviour == "resting"] <- "darkgoldenrod1"
+fkw$behavCol[fkw$behaviour == "foraging"] <- "deepskyblue2"
+fkw$behavCol[fkw$behaviour == "travelling"] <- "dimgrey"
+```
+
+```{r behaviour-track}
+plot(
+  fkw$Longitude,
+  fkw$Latitude,
+  type = "l",
+  xlab = "Longitude",
+  ylab = "Latitude"
+)
+
+points(
+  fkw$Longitude,
+  fkw$Latitude,
+  col = fkw$behavCol,
+  pch = 20,
+  cex = 0.9
+)
+```
+
+<div style="background-color:#eaf5ea; border-left:6px solid #388e3c; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>TASKS</strong>
+<p>Can you prepare a map showing the behavioural classification?</p>
+</div> 
+
+
+<div style="background-color:#f1eafa; border-left:6px solid #7952a3; padding:15px 20px; margin:20px 0; border-radius:6px;">
+<strong>INTERPRETATION</strong>
+<p>Are the inferred behaviours plausible given the animal's movement? What additional information would help validate the classifications?</p>
+</div>
+
+
+## Further challenge
+
+Choose one of the animal tracks and produce a publication-style map. Include:
+
+- an appropriate map projection and geographic extent;
+- a clear title and informative legend;
+- a scale bar and, where appropriate, a north arrow;
+- a short caption describing the data and the main pattern.
+
+# Useful help and documentation
+
+Use R's help system to explore functions while working:
+
+```{r help-examples, eval=FALSE}
+?geom_sf
+?st_transform
+?st_crs
+?st_break_antimeridian
+?occ_search
+?occurrence
+?distGeo
+?trackDistance
+?kernelUD
+?getverticeshr
+?stbc
+```
+
+Useful package websites:
+
+- [sf](https://r-spatial.github.io/sf/)
+- [ggplot2](https://ggplot2.tidyverse.org/)
+- [Natural Earth](https://www.naturalearthdata.com/)
+- [GBIF](https://www.gbif.org/)
+- [OBIS](https://obis.org/)
+- [rgbif](https://docs.ropensci.org/rgbif/)
+- [robis](https://docs.ropensci.org/robis/)
+- [adehabitatHR](https://cran.r-project.org/package=adehabitatHR)
+- [EMbC](https://cran.r-project.org/package=EMbC/)
+
+---
+
+**End of practical.** Save your R script and any maps or outputs you create. Keep a note of any data-cleaning decisions, projection choices and assumptions made during the analysis.
