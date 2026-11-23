@@ -1,7 +1,7 @@
 ---
-title: "OSX-3023: Mapping and Spatial Analysis of tracking and occurrence data"
+title: "OSX-3023: Mapping and spatial analysis of tracking and occurrence data"
 subtitle: "Practical workbook"
-author: "Marianna Chimienti"
+author: "Marianna Chimienti, m.chimienti@bangor.ac.uk"
 date: "`r Sys.Date()`"
 
 output:
@@ -290,6 +290,7 @@ The world country-boundary layer is useful for demonstrating the projection, but
 
 
 # Humpback whale: preparing and mapping tracking data
+
 ## Load the tracking data
 
 Read the humpback whale dataset. Change the path if your file is stored somewhere else.
@@ -311,6 +312,7 @@ glimpse(Humpback_whale_ID112699)
 </div>
 
 ## Combine date and time
+
 The date and time are initially stored in separate columns. Combine them into one character column:
 
 ```{r combine-date-time}
@@ -482,11 +484,13 @@ ggplot() +
 <p>Improve the legend and experiment with colour palettes. Does the map make the seasonal progression of the track easier to interpret?</p>
 </div>
 
-# Humpback whale: movement distances
+# Humpback whale: tracking and home-range analysis
+
+## Movement distances
 
 <div style="background-color:#e6f5f5; border-left:6px solid #168c8c; padding:15px 20px; margin:20px 0; border-radius:6px;">
 <strong>QUESTION</strong>
-<p>1. What was the maximum straight-line distance from Brabant Island?.</p>
+<p>What was the maximum straight-line distance from Brabant Island?.</p>
 </div>
 
 The original practical uses approximate coordinates for Brabant Island. Check these coordinates against an appropriate geographic source before treating them as definitive.
@@ -513,8 +517,8 @@ max(dist_from_island)
 <div style="background-color:#e6f5f5; border-left:6px solid #168c8c; padding:15px 20px; margin:20px 0; border-radius:6px;">
 <strong>QUESTIONS</strong>
 <ol>
-<li>1. What is the maximum distance, and what are its units? Which whale location is furthest from the island?</li>
-<li>2. What was the total distance covered along the track?</li>
+<li>What is the maximum distance, and what are its units? Which whale location is furthest from the island?</li>
+<li>What was the total distance covered along the track?</li>
 </ol>
 </div>
 
@@ -529,7 +533,7 @@ locs <- cbind(
 )
 ```
 
-Calculate distances between consecutive locations:
+Calculate distances between consecutive locations. Check the units returned by `trackDistance()` and report the total track length with units.
 
 ```{r track-distance}
 locs <- data.frame(
@@ -550,22 +554,21 @@ Sum the distances:
 sum(locs$dist, na.rm = TRUE)
 ```
 
-Check the units returned by `trackDistance()` and report the total track length with units.
-
 <div style="background-color:#f1eafa; border-left:6px solid #7952a3; padding:15px 20px; margin:20px 0; border-radius:6px;">
 <strong>INTERPRETATION</strong>
 <p>This calculation joins consecutive recorded locations with straight segments. It estimates the distance along the observed track; it does not reveal the exact path the whale took between fixes.</p>
 </div>
 
-# Humpback whale: estimating a kernel home range
 
-## What is a kernel utilisation distribution?
+## Estimating a kernel home range
+
+### What is a kernel utilisation distribution?
 
 A kernel utilisation distribution (KUD) estimates the intensity of an animal's space use from its recorded locations. Contours such as 50% and 95% are commonly used to describe areas of concentrated use and broader space use. These contours are estimates and depend on the data and smoothing choices.
 
 The `adehabitatHR` workflow used in the original practical relies on spatial objects from the `sp` package and a projected coordinate system.
 
-## Prepare the tracking locations
+### Prepare the tracking locations
 
 ```{r prepare-humpback-sp}
 hw.HR <- SpatialPointsDataFrame(
@@ -594,7 +597,7 @@ hw.HR <- spTransform(
 <p>A suitable projected CRS is essential for home-range analysis because the calculations use distances and areas. Check that the chosen UTM zone is appropriate for the geographic extent of the track.</p>
 </div>
 
-## Calculate the kernel utilisation distribution
+### Calculate the kernel utilisation distribution
 
 ```{r humpback-kernel}
 hw.HR <- kernelUD(hw.HR, h = "href")
@@ -630,7 +633,7 @@ axis(2)
 
 The 50% contour represents a smaller, more intensively used part of the estimated utilisation distribution than the 95% contour.
 
-## Convert the contours to `sf` and add them to a map
+### Convert the contours to `sf` and add them to a map
 
 Convert each contour to `sf`, transform it to longitude/latitude, and add an identifying column:
 
