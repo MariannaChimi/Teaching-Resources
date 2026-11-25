@@ -29,7 +29,7 @@ knitr::opts_chunk$set(
 
 ## About this practical
 
-This practical introduces spatial data handling and mapping in R, followed by a series of movement-ecology tasks using animal tracking data. You will work with world boundaries, GPS locations, time stamps, movement distances, kernel utilisation distributions, and biodiversity occurrence records.
+This practical introduces spatial data handling and mapping in R, followed by a series of movement-ecology tasks using animal tracking data. You will also explore occurrence records from OBIS and learn to map those for your assessment. You will work with world boundaries, GPS locations, time stamps, movement distances, kernel utilisation distributions, and biodiversity occurrence records.
 
 The practical is designed to be completed step by step. Read the explanation before running each code chunk, inspect the output, and discuss questions with your demonstrator where indicated.
 
@@ -44,12 +44,13 @@ By the end of the practical, you should be able to:
 - map animal tracks and improve map presentation;
 - calculate straight-line distances and track length;
 - estimate kernel utilisation distributions (home-range contours);
-- explore movement behaviour using the EMbC approach;
 - retrieve and map species occurrence records from GBIF.
+- explore movement behaviour using the EMbC approach;
+
 
 ## Before you begin: files and folders
 
-Make sure the practical data files are available on your computer. The original script refers to:
+Make sure the practical data files are available on your computer/folders. The original script refers to:
 
 - `Humpback_whale_ID112699.csv`
 - `falsekillerwhale.csv`
@@ -161,9 +162,11 @@ ggplot() +
 
 ### Inspect the coordinate reference system
 
-A Coordinate Reference System (CRS) describes how spatial coordinates relate to locations on the Earth. Geographic CRSs commonly use longitude and latitude in angular units. Projected CRSs transform locations onto a flat map and commonly use linear units such as metres.
+A Coordinate Reference System (CRS) describes how spatial coordinates relate to locations on the Earth. Geographic CRSs commonly use longitude and latitude in angular units. Projected CRSs transform locations onto a flat map and commonly use linear units such as meters.
 
-Inspect the CRS of the world dataset:
+
+Inspect the CRS of the world dataset - we see here the code "WGS 84"
+This website provides you with all types of projection codes: https://epsg.io/
 
 ```{r inspect-crs}
 st_crs(world)
@@ -174,6 +177,7 @@ st_crs(world)
 The Robinson projection is a compromise world projection often used for general-purpose world maps. It does not preserve every property (area, distance, direction and shape) everywhere.
 
 `st_transform()` changes the coordinates from the existing CRS to the requested CRS.
+See how we specify the new projection
 
 ```{r robinson-world}
 world_robinson <- st_transform(world,crs = "+proj=robin +datum=WGS84")
@@ -187,6 +191,8 @@ ggplot() +
 ### Centre the Robinson map on the Indian Ocean
 
 A projection's central meridian controls which longitude is placed at the centre of the map. The following workflow breaks geometries at the antimeridian before transforming them. This helps avoid long, unwanted polygon edges when the map is centred away from the Greenwich meridian.
+
+Pay attention here on how we specify the projection
 
 ```{r robinson-indian-ocean}
 # Define a Robinson projection centred at 90 degrees East
@@ -879,7 +885,7 @@ summary(fkw)
 <li>☐ Map the false killer whale track.</li>
 <li>☐ Choose an appropriate map extent and add a scale bar and north arrow.</li>
 <li>☐ Estimate the false killer whale kernel home range (help on the CRS below).</li>
-<li>☐ EMap the kernels.</li>
+<li>☐ Map the kernels.</li>
 </ul>
 </div>
 
